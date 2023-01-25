@@ -3,6 +3,7 @@ import disnake
 import sqlite3
 import random
 import json
+import datetime
 import string
 from tabulate import tabulate
 import requests
@@ -83,12 +84,12 @@ async def br(ctx):
     if loose >= 60:
         embeda = disnake.Embed(
         title = (f"Вы выиграли и получили: "),
-        description = (f"Поздравляю, ты выиграл коинов! Можешь перевести их себе на баланс."),
+        description = (f"test"),
         color = 0xFEE75C
         )
         await ctx.send(embed=embeda)
         amount = 2
-        cursor.execute("UPDATE users SET cash = cash * {} WHERE id = {}".format(amount, ctx.author.id))
+        cursor.execute("UPDATE users SET cash = cash * 2 WHERE id = {}".format(amount, ctx.author.id))
     else:
         embedf = disnake.Embed(
         title = ("Коробка с наградами."),
@@ -112,38 +113,49 @@ async def __remove_shop (ctx, role: disnake.Role = None):
 
 
 @bot.command(aliases = ['shop'])
-async def __shop (ctx):
-    embed = disnake.Embed(title = '**Магазин ролей**')
+async def __shop(ctx):
+    embed = disnake.Embed(title="**Магазин ролей**")
 
-    for row in cursor.execute("SELECT role_id, cost FROM shop WHERE id = {}".format(ctx.guild.id)):
-        if ctx.guild.get_role(row[0]) != None:
-            embed.add_field(
-                name = f"Стоимость **{row[1]} **<a:xcoincat:1001493260910469180>*",
-                value = f"Вы приобретете роль {ctx.guild.get_role(row[0]).mention}",
-                inline = False
-            )
-        else:
-            pass
-
-
-        await ctx.send( embed =embed )
+    for row in cursor.execute(f"SELECT role_id, cost FROM shop WHERE id = {ctx.guild.id}"):
+        if ctx.guild.get_role(row[0]) is not None:
+            embed.add_field(name = f"Стоимость **{row[1]} **:xcoincat:*", value = f"Вы приобретете роль {ctx.guild.get_role(row[0]).mention}", inline = False)
+    await ctx.send(embed=embed)
 
 
 @bot.command(aliases = ['buy-role'])
 async def __buy (ctx, role: disnake.Role = None):
     if role is None:
-        await ctx.send(f"**{ctx.author}, укажите роль, которую вы желаете приорести.")
+        await ctx.send(f"**{ctx.author}, Укажите роль.")
     else:
-        if role in ctx.author.roles:
-            await ctx.send("f**{ctx.author}, у вас уже имеется данная роль")
-        elif cursor.execute("SELECT cost FROM shop WHERE role_id = {}".format(role.id)).fetchone()[0] > cursor.execute("SELECT cash FROM users WHERE id = {}".format(ctx.author.id)).fetchone()[0]:
-            await ctx.send(f"**{ctx.author}**, у вас недостаточно средств для покупки данной роли")
+        role_for_sale = cursor.execute("SELECT role_id FROM shop WHERE role_id = {}".format(role.id)).fetchone()
+        if role_for_sale is None:
+            await ctx.send(f"**{ctx.author}**, Роль не для продажи")
+        elif role in ctx.author.roles:
+            await ctx.send("f**{ctx.author}, У вас уже есть эта роль")
         else:
-            await ctx.author.add_roles(role)
-            cursor.execute("UPDATE users SET cash = cash - {0} WHERE id = {1}".format(cursor.execute("SELECT cost FROM shop WHERE role_id = {}".format(role.id)).fetchone()[0], ctx.author.id)) 
-        connection.commit()
-        await ctx.message.add_reaction('✅')
+            cost = cursor.execute("SELECT cost FROM shop WHERE role_id = {}".format(role.id)).fetchone()[0]
+            cash = cursor.execute("SELECT cash FROM users WHERE id = {}".format(ctx.author.id)).fetchone()[0]
+            if cost > cash:
+                await ctx.send(f"**{ctx.author}**, не хватает {cost-cash} монет")
+            else:
+                await ctx.author.add_roles(role)
+                cursor.execute("UPDATE users SET cash = cash - {0} WHERE id = {1}".format(cost, ctx.author.id)) 
+                connection.commit()
+                await ctx.message.add_reaction('✅')
 
+
+@bot.command()
+async def transfer(ctx, recipient: disnake.User, amount: int):
+    sender_id = ctx.author.id
+    sender_cash = cursor.execute("SELECT cash FROM users WHERE id = {}".format(sender_id)).fetchone()[0]
+    if sender_cash < amount:
+        await ctx.send(f"**{ctx.author}**, У вас не хватает для перевода {amount} монет.")
+    else:
+        recipient_cash = cursor.execute("SELECT cash FROM users WHERE id = {}".format(recipient.id)).fetchone()[0]
+        cursor.execute("UPDATE users SET cash = cash - {} WHERE id = {}".format(amount, sender_id))
+        cursor.execute("UPDATE users SET cash = cash + {} WHERE id = {}".format(amount, recipient.id))
+        connection.commit()
+        await ctx.send(f"**{ctx.author}** вы перевели {amount} для **{recipient}**.\n{ctx.author}'s Новый баланс: {sender_cash - amount}\n{recipient} Новый баланс: {recipient_cash + amount}")
 
 
 
@@ -278,6 +290,7 @@ async def clear ( ctx, amount = 1):
 
 
 @bot.command(aliases = ['rep', '+rep'])
+@commands.cooldown(1, 60*60*24, commands.BucketType.user)
 async def __rep(ctx, member: disnake.Member = None):
     cursor.execute("UPDATE users SET rep = rep + {} WHERE id = {}".format(1, member.id))
     connection.commit()
@@ -287,6 +300,22 @@ async def __rep(ctx, member: disnake.Member = None):
     colour=0x00
         ))
 
+
+@__rep.error
+async def command_rep_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        time = datetime.timedelta(seconds=error.retry_after)
+        hour = time.seconds // 3600
+        minute = (time.seconds // 60) % 60
+    
+        em = disnake.Embed(description=f"Вы уже выдали +rep одному из пользователей. Вы сможете снова использовать эту команду через {hour}:{minute}", color=0x2f3136)
+        em.set_author(
+        name=f"""{ctx.author.name}""",
+        icon_url=f"""{ctx.author.avatar.url}"""
+        )
+        em.set_thumbnail(url="https://media.discordapp.net/attachments/763496900551901254/892528061646536794/strelka_spin_2.gif")
+
+        await ctx.send(embed=em)
 
 @bot.command(aliases = ['lb'])
 async def __lb(ctx):
@@ -427,4 +456,4 @@ async def help( ctx ):
 
 
 
-bot.run("MTA2NTM0NzQwMDIzNzA3NjU1MA.GmEQ7z._170cGfP1zsge7mlVon_P76ycswMNLVm1uz5hY")
+bot.run("MTA2NTM0NzQwMDIzNzA3NjU1MA.GOEswd.IR1xzNwMF7cgWUItPpqqmXfFb5Xl36N4BmXPJw")
